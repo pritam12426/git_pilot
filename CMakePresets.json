@@ -1,0 +1,245 @@
+{
+	"version": 10,
+	"configurePresets": [
+		{
+			"name": "debug",
+			"displayName": "Debug",
+			"generator": "Ninja",
+			"binaryDir": "build/debug",
+			"cacheVariables": {
+				"CMAKE_BUILD_TYPE": "Debug",
+				"LOG_SHOW_TIME_STAMP": "ON",
+				"LOG_SHOW_SOURCE_LOCATION": "ON"
+			}
+		},
+		{
+			"name": "release",
+			"displayName": "Release",
+			"generator": "Ninja",
+			"binaryDir": "build/release",
+			"cacheVariables": {
+				"CMAKE_BUILD_TYPE": "Release",
+				"LOG_SHOW_TIME_STAMP": "ON"
+			}
+		},
+		{
+			"name": "visualstudio-debug",
+			"displayName": "Debug (Visual Studio 17 2022)",
+			"generator": "Visual Studio 17 2022",
+			"binaryDir": "build/vs-debug",
+			"cacheVariables": {
+				"LOG_SHOW_TIME_STAMP": "ON",
+				"LOG_SHOW_SOURCE_LOCATION": "ON"
+			},
+			"condition": {
+				"type": "equals",
+				"lhs": "${hostSystemName}",
+				"rhs": "Windows"
+			}
+		},
+		{
+			"name": "visualstudio-release",
+			"displayName": "Release (Visual Studio 17 2022)",
+			"generator": "Visual Studio 17 2022",
+			"binaryDir": "build/vs-release",
+			"cacheVariables": {
+				"LOG_SHOW_TIME_STAMP": "ON"
+			},
+			"condition": {
+				"type": "equals",
+				"lhs": "${hostSystemName}",
+				"rhs": "Windows"
+			}
+		},
+		{
+			"name": "xcode-debug",
+			"displayName": "Debug (Xcode)",
+			"generator": "Xcode",
+			"binaryDir": "build/xcode-debug",
+			"cacheVariables": {
+				"CMAKE_BUILD_TYPE": "Debug",
+				"CMAKE_OSX_ARCHITECTURES": "x86_64;arm64",
+				"LOG_SHOW_TIME_STAMP": "ON",
+				"LOG_SHOW_SOURCE_LOCATION": "ON"
+			},
+			"condition": {
+				"type": "equals",
+				"lhs": "${hostSystemName}",
+				"rhs": "Darwin"
+			}
+		},
+		{
+			"name": "xcode-release",
+			"displayName": "Release (Xcode)",
+			"generator": "Xcode",
+			"binaryDir": "build/xcode-release",
+			"cacheVariables": {
+				"CMAKE_BUILD_TYPE": "Release",
+				"CMAKE_OSX_ARCHITECTURES": "x86_64;arm64",
+				"LOG_SHOW_TIME_STAMP": "ON"
+			},
+			"condition": {
+				"type": "equals",
+				"lhs": "${hostSystemName}",
+				"rhs": "Darwin"
+			}
+		}
+	],
+	"buildPresets": [
+		{
+			"name": "debug",
+			"displayName": "Build Debug",
+			"configurePreset": "debug",
+			"configuration": "Debug"
+		},
+		{
+			"name": "release",
+			"displayName": "Build Release",
+			"configurePreset": "release",
+			"configuration": "Release"
+		},
+		{
+			"name": "visualstudio-debug",
+			"displayName": "Build Debug (Visual Studio 17 2022)",
+			"configurePreset": "visualstudio-debug",
+			"configuration": "Debug",
+			"condition": {
+				"type": "equals",
+				"lhs": "${hostSystemName}",
+				"rhs": "Windows"
+			}
+		},
+		{
+			"name": "visualstudio-release",
+			"displayName": "Build Release (Visual Studio 17 2022)",
+			"configurePreset": "visualstudio-release",
+			"configuration": "Release",
+			"condition": {
+				"type": "equals",
+				"lhs": "${hostSystemName}",
+				"rhs": "Windows"
+			}
+		},
+		{
+			"name": "xcode-debug",
+			"displayName": "Build Debug (Xcode)",
+			"configurePreset": "xcode-debug",
+			"configuration": "Debug",
+			"condition": {
+				"type": "equals",
+				"lhs": "${hostSystemName}",
+				"rhs": "Darwin"
+			}
+		},
+		{
+			"name": "xcode-release",
+			"displayName": "Build Release (Xcode)",
+			"configurePreset": "xcode-release",
+			"configuration": "Release",
+			"condition": {
+				"type": "equals",
+				"lhs": "${hostSystemName}",
+				"rhs": "Darwin"
+			}
+		}
+	],
+	"packagePresets": [
+		{
+			"name": "release",
+			"displayName": "Distribute Release",
+			"configurePreset": "release",
+			"configurations": [
+				"Release"
+			]
+		},
+		{
+			"name": "visualstudio-release",
+			"displayName": "Distribute Release (Visual Studio 17 2022)",
+			"configurePreset": "visualstudio-release",
+			"configurations": [
+				"Release"
+			],
+			"condition": {
+				"type": "equals",
+				"lhs": "${hostSystemName}",
+				"rhs": "Windows"
+			}
+		},
+		{
+			"name": "xcode-release",
+			"displayName": "Distribute Release (Xcode)",
+			"configurePreset": "xcode-release",
+			"configurations": [
+				"Release"
+			],
+			"condition": {
+				"type": "equals",
+				"lhs": "${hostSystemName}",
+				"rhs": "Darwin"
+			}
+		}
+	],
+	"testPresets": [
+		{
+			"name": "all",
+			"displayName": "Test All",
+			"configurePreset": "debug"
+		}
+	],
+	"workflowPresets": [
+		{
+			"name": "dist",
+			"displayName": "Distribution Workflow",
+			"steps": [
+				{
+					"type": "configure",
+					"name": "release"
+				},
+				{
+					"type": "build",
+					"name": "release"
+				},
+				{
+					"type": "package",
+					"name": "release"
+				}
+			]
+		},
+		{
+			"name": "visualstudio-dist",
+			"displayName": "Distribution Workflow (Visual Studio 17 2022)",
+			"steps": [
+				{
+					"type": "configure",
+					"name": "visualstudio-release"
+				},
+				{
+					"type": "build",
+					"name": "visualstudio-release"
+				},
+				{
+					"type": "package",
+					"name": "visualstudio-release"
+				}
+			]
+		},
+		{
+			"name": "xcode-dist",
+			"displayName": "Distribution Workflow (Xcode)",
+			"steps": [
+				{
+					"type": "configure",
+					"name": "xcode-release"
+				},
+				{
+					"type": "build",
+					"name": "xcode-release"
+				},
+				{
+					"type": "package",
+					"name": "xcode-release"
+				}
+			]
+		}
+	]
+}

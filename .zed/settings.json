@@ -1,0 +1,8 @@
+{
+	"languages": {
+		"C++": {
+			"soft_wrap": "prefer_line",
+			"formatter": "language_server"
+		}
+	}
+}

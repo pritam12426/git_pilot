@@ -1,0 +1,23 @@
+[
+	{
+		"label": "Debug native binary",
+		"build": {
+			"command": "cmake",
+			"args": [
+				"--build",
+				"build/debug"
+			],
+			"cwd": "$ZED_WORKTREE_ROOT",
+			"shell": {
+				"with_arguments": {
+					"program": "/bin/sh",
+					"args": []
+				}
+			}
+		},
+		"program": "$ZED_WORKTREE_ROOT/build/debug/src/git_pilot_server",
+		"args": [],
+		"request": "launch",
+		"adapter": "CodeLLDB"
+	}
+]
