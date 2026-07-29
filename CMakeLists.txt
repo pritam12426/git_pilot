@@ -35,6 +35,14 @@ find_package(Boost REQUIRED COMPONENTS
 find_package(libgit2 REQUIRED)
 find_package(Threads REQUIRED)
 
+# Generate project config header
+set(GITPILOT_CONFIG_OUTPUT_DIR "${PROJECT_BINARY_DIR}/include/git_pilot")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/project_config.hpp.in"
+    "${GITPILOT_CONFIG_OUTPUT_DIR}/project_config.hpp"
+    @ONLY
+)
+
 # Subdirectories
 add_subdirectory(src)
 add_subdirectory(config)

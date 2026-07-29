@@ -47,6 +47,7 @@ target_include_directories(git_pilot_core
         ${CMAKE_CURRENT_SOURCE_DIR}/protocol
         ${CMAKE_CURRENT_SOURCE_DIR}/tools
         ${CMAKE_CURRENT_SOURCE_DIR}/utils
+        ${PROJECT_BINARY_DIR}/include
 )
 
 # Link libraries
