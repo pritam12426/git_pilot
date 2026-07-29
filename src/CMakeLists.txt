@@ -17,6 +17,9 @@ set(SOURCES
     utils/logger.cpp
     utils/json_helpers.cpp
     utils/error_handling.cpp
+    git/repo.cpp
+    git/actor.cpp
+    git/commands.cpp
 )
 
 # Conditionally add HTTP transport source
@@ -47,6 +50,8 @@ target_include_directories(git_pilot_core
         ${CMAKE_CURRENT_SOURCE_DIR}/protocol
         ${CMAKE_CURRENT_SOURCE_DIR}/tools
         ${CMAKE_CURRENT_SOURCE_DIR}/utils
+        ${CMAKE_CURRENT_SOURCE_DIR}/git
+        ${CMAKE_CURRENT_SOURCE_DIR}/git/ops
         ${PROJECT_BINARY_DIR}/include
 )
 

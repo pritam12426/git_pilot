@@ -1,37 +1,38 @@
 #pragma once
 
+#include <boost/json.hpp>
+
 #include <memory>
-#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 
-namespace git_pilot {
-namespace tools {
+namespace git_pilot::tools {
 
 struct ToolParameter {
-	std::string    name;
-	std::string    type;
-	std::string    description;
-	bool           required = false;
-	nlohmann::json schema;
+	std::string      name;
+	std::string      type;
+	std::string      description;
+	bool             required = false;
+	boost::json::value schema;
 };
 
 struct ToolDefinition {
-	std::string                name;
-	std::string                description;
-	std::vector<ToolParameter> parameters;
+	std::string                 name;
+	std::string                 description;
+	std::vector<ToolParameter>  parameters;
 
-	nlohmann::json to_json_schema() const
+	[[nodiscard]] boost::json::value to_json_schema() const
 	{
-		nlohmann::json schema;
+		boost::json::object schema;
 		schema["type"]       = "object";
-		schema["properties"] = nlohmann::json::object();
-		schema["required"]   = nlohmann::json::array();
+		schema["properties"] = boost::json::object{};
+		schema["required"]   = boost::json::array{};
 
 		for (const auto &param : parameters) {
-			schema["properties"][param.name] = param.schema;
+			schema["properties"].as_object()[param.name] = param.schema;
 			if (param.required) {
-				schema["required"].push_back(param.name);
+				schema["required"].as_array().push_back(
+				    boost::json::value(param.name));
 			}
 		}
 
@@ -43,10 +44,9 @@ class ToolBase
 {
 public:
 	virtual ~ToolBase() = default;
-	virtual ToolDefinition get_definition() const                   = 0;
-	virtual nlohmann::json execute(const nlohmann::json &arguments) = 0;
-	virtual bool validate_arguments(const nlohmann::json &args) const { return true; }
+	virtual ToolDefinition get_definition() const                         = 0;
+	virtual boost::json::value execute(const boost::json::value &arguments) = 0;
+	virtual bool validate_arguments(const boost::json::value &args) const { return true; }
 };
 
-}  // namespace tools
-}  // namespace git_pilot
+}  // namespace git_pilot::tools

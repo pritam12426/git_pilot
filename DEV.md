@@ -2,210 +2,252 @@
 
 ## Architecture
 
-GitPilot implements MCP so AI clients can call Git operations through a
-standardized tool interface.
+GitPilot is a C++20 MCP server. AI clients send JSON-RPC 2.0 requests over
+stdin; the server dispatches them to Git tools backed by libgit2.
 
 ```mermaid
 flowchart LR
-    Client["AI Client (e.g. OpenCode)"]
-    Transport["Transport Layer<br/>stdio / HTTP"]
-    JSONRPC["JSON-RPC 2.0"]
-    Handler["MCP Handler"]
-    Registry["Tool Registry"]
-    Git["libgit2 ops"]
-    Logger["Logger<br/>(implemented)"]
+    Client["AI Client"]
+    Stdio["StdioTransport<br/>stdin → line read<br/>stdout → serialized"]
+    MCP["MCP Handler<br/>tools/list, tools/call"]
+    Registry["Tool Registry<br/>status, log, diff, commit"]
+    GitOps["git:: commands<br/>libgit2 C API"]
+    Logger["Logger"]
 
-    Client --> Transport
-    Transport --> JSONRPC
-    JSONRPC --> Handler
-    Handler --> Registry
-    Registry --> Git
-    Registry -.-> Logger
+    Client -->|newline-delimited JSON| Stdio
+    Stdio -->|parse, callback| MCP
+    MCP -->|dispatch| Registry
+    Registry -->|execute| GitOps
+    GitOps -->|boost::json::value| Registry
+    MCP -.->|logging| Logger
 ```
 
-Currently implemented: `Logger`. Everything else is planned (source stubs exist).
-
-### Request lifecycle (planned)
-
-1. Client sends Content-Length framed JSON-RPC 2.0 over stdin or HTTP
-2. Transport reads the frame, parses JSON body
-3. JSON-RPC dispatches by method: `initialize`, `tools/list`, `tools/call`
-4. MCP Handler validates and routes to Tool Registry
-5. Tool Registry looks up the tool and calls `execute(json)`
-6. Tool performs Git operation via libgit2, returns JSON-RPC response
+### Request lifecycle
 
 ```mermaid
 sequenceDiagram
-    participant Client
-    participant Transport
-    participant JSONRPC
-    participant Handler
-    participant Tool
+    participant C as Client
+    participant T as StdioTransport
+    participant S as Session
+    participant M as MCP Handler
+    participant R as ToolRegistry
+    participant G as git::commands
 
-    Client->>Transport: Content-Length framed JSON
-    Transport->>JSONRPC: Parse body
-    JSONRPC->>Handler: Dispatch by method
-    Handler->>Tool: execute(arguments)
-    Tool-->>Handler: result json
-    Handler-->>JSONRPC: Format response
-    JSONRPC-->>Transport: Frame response
-    Transport-->>Client: Content-Length framed JSON
+    C->>T: {"jsonrpc":"2.0","method":"tools/call","params":{...},"id":1}\n
+    T->>T: boost::json::parse(line)
+    T->>S: on_message(value)
+    S->>M: handle_mcp_message(value)
+    M->>M: parse_request → method + params + id
+    M->>R: find("status")
+    R-->>M: ToolBase*
+    M->>G: tool->execute(params)
+    G->>G: libgit2 C API
+    G-->>M: boost::json::value result
+    M->>M: make_success_response(id, result)
+    M-->>S: boost::json::value
+    S-->>T: send(response)
+    T->>C: {"jsonrpc":"2.0","result":{...},"id":1}\n
 ```
 
-## Build system
+---
 
-CMake 4.4.0+, C++20, Ninja (default) or Xcode. Presets in `CMakePresets.json`:
+## Server Endpoints (MCP Methods)
 
-| Preset          | Generator | Binary dir            |
-| --------------- | --------- | --------------------- |
-| `debug`         | Ninja     | `build/debug`         |
-| `release`       | Ninja     | `build/release`       |
-| `xcode-debug`   | Xcode     | `build/xcode-debug`   |
-| `xcode-release` | Xcode     | `build/xcode-release` |
+### `tools/list`
+
+Returns all registered tool definitions with their JSON Schema input schemas.
+
+**Request:**
+
+```json
+{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+```
+
+**Response:** `result.tools` array of `{name, description, inputSchema}` objects.
+See [DEV_IN_DEPTH.md](DEV_IN_DEPTH.md#tools) for full schemas.
+
+**Side effects:** None.
+
+### `tools/call`
+
+Execute a tool by name with the supplied arguments.
+
+**Request:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "status",
+    "arguments": {"repo_path": "."}
+  }
+}
+```
+
+**Success response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [{"type": "text", "text": "{\"files\": [...]}"}]
+  }
+}
+```
+
+**Error response codes:**
+
+| Code   | Meaning          | When                                 |
+| ------ | ---------------- | ------------------------------------ |
+| -32700 | Parse error      | Invalid JSON on stdin                |
+| -32600 | Invalid Request  | Missing `jsonrpc: "2.0"` or `method` |
+| -32601 | Method not found | Unknown method string                |
+| -32602 | Invalid params   | Missing/unknown tool name, bad args  |
+| -32603 | Internal error   | Tool execution threw exception       |
+
+**Side effects:** `commit` writes to the git repository.
+
+---
+
+## Tools
+
+| Tool     | Required params        | Optional params                                                   | Returns            |
+| -------- | ---------------------- | ----------------------------------------------------------------- | ------------------ |
+| `status` | `repo_path`            | —                                                                 | `{files: [...]}`   |
+| `log`    | `repo_path`            | `max_count` (int, default 10), `branch` (string, default "HEAD")  | `{commits: [...]}` |
+| `diff`   | `repo_path`            | `target` (string, default "HEAD"), `staged` (bool, default false) | `{patch: "..."}`   |
+| `commit` | `repo_path`, `message` | `author_name`, `author_email` (strings)                           | `{hash, message}`  |
+
+If `author_name`/`author_email` are omitted, empty strings are passed to
+libgit2. `GitActor::from_config()` exists as a static method but is not
+currently called by any tool. An empty signature causes a libgit2 error.
+
+---
+
+## Concurrency
+
+- **Stdio mode**: single-threaded. `StdioTransport::run()` blocks on
+  `std::getline()`. Only one request is processed at a time.
+- **HTTP mode**: single-threaded infinite accept loop. No per-connection
+  session handling or concurrency is implemented.
+- **No rate limiting, queuing, or worker pools** exist.
+
+---
+
+## Build System
 
 ```sh
-cmake --preset debug                 # configure
-cmake --build --preset debug         # build (zero warnings)
-build/debug/src/git_pilot_server     # run
+cmake --preset debug                   # configure (build/debug)
+cmake --build --preset debug           # build
+build/debug/src/git_pilot_server      # run
 ```
 
-The `git_pilot_core` target is an **OBJECT library** — all `.o` files link
-directly into `git_pilot_server` without an intermediate `.dylib`.
+The `git_pilot_core` target is an **OBJECT library** — object files compile once
+and link directly into `git_pilot_server` without an intermediate archive.
 
-### Remaining build issues
+### Build presets
 
-- **nlohmann/json** — used by `tool_base.hpp` but not declared via
-  `find_package` in CMake. Found via system include path on the developer's
-  machine. Add `find_package(nlohmann_json REQUIRED)` to `CMakeLists.txt` when
-  formalizing the dependency.
-- **No test targets** — `tests/CMakeLists.txt` is empty. Unit/integration test
-  stubs exist under `tests/` but have no CTest registration.
+| Preset          | Generator  | Binary dir            | Notes                                           |
+| --------------- | ---------- | --------------------- | ----------------------------------------------- |
+| `debug`         | Ninja      | `build/debug`         | ASan+UBSan, `-O0`, timestamps + source location |
+| `release`       | Ninja      | `build/release`       | `-O3`, timestamp only                           |
+| `xcode-debug`   | Xcode      | `build/xcode-debug`   | macOS only, arm64+x86_64                        |
+| `xcode-release` | Xcode      | `build/xcode-release` | macOS only                                      |
+| `vs-debug`      | VS 17 2022 | `build/vs-debug`      | Windows only                                    |
+| `vs-release`    | VS 17 2022 | `build/vs-release`    | Windows only                                    |
 
-### Dependencies
+### Compile-time options
 
-| Library                               | Required | Used by              |
-| ------------------------------------- | -------- | -------------------- |
-| Boost (system, json, program_options) | Yes      | Transport, JSON, CLI |
-| libgit2                               | Yes      | Git operations       |
-| Threads                               | Yes      | Logger mutex         |
-| nlohmann/json                         | Yes*     | Tool interface       |
+| CMake Option               | Default | Effect                                       |
+| -------------------------- | ------- | -------------------------------------------- |
+| `LOG_SHOW_TIME_STAMP`      | ON      | Timestamp `[HH:MM:SS.ffffff]` per log line   |
+| `LOG_SHOW_SOURCE_LOCATION` | OFF     | Source `[file:line:function]` per log line   |
+| `LOG_USE_FMT`              | OFF     | Use `fmt::vformat` instead of `std::vformat` |
+| `ENABLE_HTTP`              | ON      | Build HTTP transport source                  |
+| `ENABLE_STDIO`             | ON      | Build stdio transport source (always on)     |
+| `BUILD_TESTS`              | ON      | Enable CTest (no tests registered yet)       |
 
-\* Not declared in CMake — see build issues above.
+---
 
-Boost.Asio and Boost.Beast are not direct dependencies (header-only; used only
-if HTTP transport is implemented).
-
-## Repo layout
+## Repo Layout
 
 ```
-include/
-  git_pilot/              Active headers
-    utils/logger.hpp        Logger class + macros
-    tools/tool_base.hpp     ToolBase abstract interface
-    sample.hpp              Scaffolding (stub)
-    sample_1.hpp            Scaffolding duplicate (stub)
-  git_mcp/                Empty placeholder namespace (18 stub headers)
+include/git_pilot/       Active namespace — tools, utils (logger)
+include/git_mcp/         Protocol/transport namespace — types, handler, session, transport
 src/
-  main.cpp                Entry point (logger demo)
-  server.cpp / session.cpp  Empty stubs
-  utils/logger.cpp        Logger implementation (237 lines)
-  utils/*.cpp             3 empty stubs
-  tools/*.cpp             6 empty stubs (tool_registry + 5 git tools)
-  protocol/*.cpp          3 empty stubs
-  transport/*.cpp         3 empty stubs
-cmake/
-  CompilerOptions.cmake   Shared compiler flags
-config/                   Empty stubs
-tests/
-  CMakeLists.txt          Empty (0 bytes)
-  unit/                   4 empty test stubs
-  integration/            2 empty test stubs
+  main.cpp               Entry point (CLI, dispatch to stdio or HTTP mode)
+  server.cpp             HTTP TCP acceptor (skeleton)
+  session.cpp            Wires transport → handler → response
+  protocol/types.cpp     JSON-RPC 2.0 parse/serialize
+  protocol/mcp_handler.cpp  tools/list, tools/call dispatch
+  transport/stdio_transport.cpp  stdin/stdout line-based transport
+  tools/tool_registry.cpp  Singleton registry, registers 4 tools
+  tools/git_status/log/diff/commit.cpp  Concrete tool implementations
+  git/                   RAII wrappers + git commands (status/log/diff/commit)
+  utils/logger.cpp       Logger implementation
+  utils/*.cpp            3 empty stubs (error_handling, json_helpers)
+  tools/*.cpp            7 empty stubs (clone, add, branches, checkout, merge, show, branch_create)
+  git/ops/*.cpp          9 empty stubs (decomposed operations)
+  protocol/json_rpc.cpp  Empty (types live in types.cpp)
+  transport/http_transport.cpp  Empty stub
+cmake/                   CompilerOptions.cmake, project_config.hpp.in
+config/                  Empty (not yet implemented)
+tests/                   6 empty test stubs (unit/ + integration/), no CTest registration
 ```
 
-## Coding conventions
+---
+
+## Coding Conventions
 
 - **Format**: tabs (4-space width), ColumnLimit 100, `PointerAlignment: Right`,
   `ReferenceAlignment: Pointer`. Run `clang-format -i <file>`.
-- **Lint**: `.clang-tidy` enables readability-_, modernize-_, bugprone-_,
-  misc-_ checks.
+- **Lint**: `.clang-tidy` enables `readability-*`, `modernize-*`, `bugprone-*`,
+  `misc-*` checks.
 - **EditorConfig**: tab indent for C/C++, space indent for CMake.
-- **Namespace**: `git_pilot::utils`, `git_pilot::tools`. The `git_mcp` namespace
-  is an empty placeholder.
+- **Namespaces**: `git_pilot::tools`, `git_pilot::git`, `git_pilot::utils` for
+  implementation. `git_mcp::protocol`, `git_mcp::transport` for MCP layer.
 - **Doxygen required**: all public interfaces must include `@brief`, `@param`,
   `@return`, `@throws`, `@file`, `@author`, `@date`, `@version`.
 
-## Logging
-
-Singleton at `git_pilot::utils::Logger::instance()`. Writes to **stderr** by
-default; optionally to a file.
-
-```cpp
-Logger::instance().init("", LogLevel::Debug);              // stderr (default)
-Logger::instance().init("/var/log/git_pilot.log", ...);    // file
-```
-
-### Macros
-
-| Macro        | Level | Notes                     |
-| ------------ | ----- | ------------------------- |
-| `LOG_FATAL`  | Fatal | Bright bold red           |
-| `LOG_ERROR`  | Error | Bold red                  |
-| `LOG_WARN`   | Warn  | Bold yellow               |
-| `LOG_INFO`   | Info  | Bold green                |
-| `LOG_DEBUG`  | Debug | Bold cyan                 |
-| `LOG_TRACE`  | Trace | Bold magenta              |
-| `LOG_PERROR` | Error | Appends `strerror(errno)` |
-
-Each macro guards with `is_level_enabled()` **before** evaluating
-`source_location::current()` or formatting arguments. Disabled log calls are
-zero-cost.
-
-### Compile-time flags
-
-| Flag                       | Effect                                       |
-| -------------------------- | -------------------------------------------- |
-| `LOG_SHOW_TIME_STAMP`      | Timestamp `[HH:MM:SS.ffffff]` per line       |
-| `LOG_SHOW_SOURCE_LOCATION` | Source `[file:line:function]` per line       |
-| `LOG_USE_FMT`              | Use `fmt::vformat` instead of `std::vformat` |
-| `ENABLE_HTTP`              | Build HTTP transport                         |
-| `ENABLE_STDIO`             | Build stdio transport                        |
-
-Source locations are project-relative at compile time via
-`-fmacro-prefix-map=${CMAKE_SOURCE_DIR}/=` (defined in
-`cmake/CompilerOptions.cmake`).
-
-### Thread safety
-
-- `mutex_` guards all output writes and stream/state mutations.
-- `min_level_` is `std::atomic<LogLevel>` — `is_level_enabled()` is lock-free.
-- No per-line flush — buffered I/O for throughput.
-
-## Tool interface
-
-Abstract base in `include/git_pilot/tools/tool_base.hpp` — namespace
-`git_pilot::tools`:
-
-```
-ToolBase
- ├── get_definition() -> ToolDefinition
- ├── execute(json) -> json
- └── validate_arguments(json) -> bool
-
-ToolDefinition
- ├── name, description, parameters
- └── to_json_schema() -> json schema
-
-ToolParameter
- ├── name, type, description, required
- └── schema (nlohmann::json)
-```
-
-Concrete tool stubs (all empty): `git_clone`, `git_status`, `git_commit`,
-`git_log`, `git_diff`.
+---
 
 ## Testing
 
-Not yet implemented. Test stubs exist at `tests/unit/` (4 files) and
-`tests/integration/` (2 files). No CTest registration.
+No test framework is integrated. Six empty test stubs exist under `tests/`
+(4 unit, 2 integration). `tests/CMakeLists.txt` is a comment-only placeholder.
+`ctest --preset all` reports zero tests.
 
-For implementation internals see [DEV_IN_DEPTH.md](DEV_IN_DEPTH.md).
+---
+
+## Logging
+
+For the full API reference, see `include/git_pilot/utils/logger.hpp` and
+[DEV_IN_DEPTH.md](DEV_IN_DEPTH.md#logger).
+
+```cpp
+Logger::instance().init("", LogLevel::Debug);           // stderr
+Logger::instance().init("/var/log/git_pilot.log", ...); // file
+```
+
+**Macros**: `LOG_FATAL`, `LOG_ERROR`, `LOG_WARN`, `LOG_INFO`, `LOG_DEBUG`,
+`LOG_TRACE`, `LOG_PERROR`, `LOG_AT`. Each guards with `is_level_enabled()`
+before evaluating arguments — zero cost when disabled.
+
+**Thread safety**: `mutex_` guards output; `min_level_` is `std::atomic` —
+lock-free for level checks.
+
+---
+
+## Known Limitations
+
+- **No MCP lifecycle handshake** — `initialize`/`initialized` is not implemented
+- **No Content-Length framing** — stdio transport uses newline-delimited JSON
+- **HTTP mode is a skeleton** — accepts TCP connections and closes them immediately
+- **No tests** — test stubs exist but are empty, no CTest registration
+- **7 tool stubs** — `clone`, `add`, `checkout`, `merge`, `show`, `branches`, `branch_create` are empty
+- **Config subsystem** — `config/` is empty
+- **`temp/` directory** — contains 25 scratch stub files (not built)
+- **`use_color()` acquires mutex** — trivial bool getter takes the logger mutex

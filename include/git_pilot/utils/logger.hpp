@@ -64,6 +64,14 @@ enum class LogLevel : uint8_t {
 	}
 }
 
+// Stream operator for LogLevel (needed by Boost.Program_options default_value rendering)
+inline std::ostream &operator<<(std::ostream &os, LogLevel level)
+{
+	auto s = log_level_to_string(level);
+	while (!s.empty() && s.back() == ' ') s.remove_suffix(1);
+	return os << s;
+}
+
 // ─── Logger Class ───────────────────────────────────────────────────────────
 
 class Logger
